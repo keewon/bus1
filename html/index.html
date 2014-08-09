@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=EmulateIE7">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>bus1 - bus time machine</title>
+
+<script src="http://code.jquery.com/jquery-1.11.0.min.js"></script>
+<script type="text/javascript" src="main.js" ></script>
+
+</head>
+<body>
+<div>
+	추가할 버스 번호:<input type="text" id="busNoText" />
+	<input type="button" value="검색" onclick="searchBusId();" /><br/>
+	예) 9404, 성남 5
+</div>
+<div id="searchDiv1">
+<ul id="searchList1">
+</ul>
+</div>
+<div id="searchList2">
+</div>
+<script type="text/javascript">
+
+var longitude = '';
+var latitude = '';
+
+window.navigator.geolocation.getCurrentPosition(
+	function(data) {
+		longitude = data.coords.longitude;
+		latitude = data.coords.latitude;
+	},
+	function(error) {
+	});
+
+function searchBusId() {
+	var text = $('#busNoText').val();
+	var url="/cgi-bin/naver_bus_id_api.py?q=" + encodeURI(text) + 
+			"&longitude=" + encodeURI(longitude) + '&latitude=' + encodeURI(latitude);
+
+	$.ajax(url).done(
+		function(data) {
+			var i;
+			var busList = data.result.bus.list;
+			var $searchList1 = $('#searchList1');
+			$searchList1.html('');
+			for (i=0; i<busList.length; ++i) {
+				var bus = busList[i];
+				$searchList1.append(
+					"<li><a href=\"javascript:setBusId('" +
+					bus.id +
+					"');\">[" + bus.id + "][" + bus.cityName + '][' +
+					bus.typeName + '] ' +
+					bus.displayName + '</a></li>'
+				);
+			}
+		}
+		);
+}
+
+$('#busNoText').keyup(function (e) {
+	if (e.keyCode == 13) {
+		searchBusId();
+	}
+});
+</script>
+</body>
+</html>
