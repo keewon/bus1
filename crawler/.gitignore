@@ -1,3 +1,7 @@
 deps
 ebin
 .erlang.mk.packages.v2
+_rel
+relx
+*.dump
+*.log

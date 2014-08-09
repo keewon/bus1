@@ -1,5 +1,6 @@
 -module(worker).
 -behaviour(gen_server).
+-include("crawler.hrl").
 
 %% API.
 -export([start_link/0]).
@@ -13,30 +14,30 @@
 -export([code_change/3]).
 
 -record(state, {
-}).
+         }).
 
 %% API.
 
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-	gen_server:start_link(?MODULE, [], []).
+    gen_server:start_link(?MODULE, [], []).
 
 %% gen_server.
 
 init([]) ->
-	{ok, #state{}}.
+    {ok, #state{}}.
 
 handle_call(_Request, _From, State) ->
-	{reply, ignored, State}.
+    {reply, ignored, State}.
 
 handle_cast(_Msg, State) ->
-	{noreply, State}.
+    {noreply, State}.
 
 handle_info(_Info, State) ->
-	{noreply, State}.
+    {noreply, State}.
 
 terminate(_Reason, _State) ->
-	ok.
+    ok.
 
 code_change(_OldVsn, State, _Extra) ->
-	{ok, State}.
+    {ok, State}.
