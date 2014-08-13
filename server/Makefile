@@ -1,4 +1,4 @@
-PROJECT = crawler
+PROJECT = bus_archive
 DEPS = cowboy lager jsx sync
 
 dep_cowboy = git https://github.com/ninenines/cowboy 1.0.0
@@ -9,10 +9,10 @@ include erlang.mk
 ERLC_OPTS += +'{parse_transform, lager_transform}'
 
 RUN := erl -pa ebin -pa deps/*/ebin -smp enable -s sync -s lager -boot start_sasl ${ERL_ARGS}
-NODE ?= crawler
+NODE ?= bus_archive
 
 run: shell
 shell: app
-	if [ -n "${NODE}" ]; then ${RUN} -name ${NODE}@`hostname` -s crawler_app -config rel/sys.config; \
-	else ${RUN} -s crawler -config rel/sys.config; \
+	if [ -n "${NODE}" ]; then ${RUN} -name ${NODE}@`hostname` -s bus_archive_app -config rel/sys.config; \
+	else ${RUN} -s bus_archive -config rel/sys.config; \
 	fi

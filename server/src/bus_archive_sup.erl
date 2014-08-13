@@ -1,6 +1,6 @@
--module(crawler_sup).
+-module(bus_archive_sup).
 -behaviour(supervisor).
--include("crawler.hrl").
+-include("bus_archive.hrl").
 
 -export([start_link/0, start_listeners/0]).
 -export([init/1]).
@@ -10,14 +10,14 @@ start_link() ->
 
 init([]) ->
     Procs = [
-        {web_interface_listener, {crawler_sup, start_listeners, []}, permanent, 1000, worker, [crawler_sup]}
+        {web_interface_listener, {bus_archive_sup, start_listeners, []}, permanent, 1000, worker, [bus_archive_sup]}
     ],
     lager:info("hello!", []),
     {ok, {{one_for_one, 1, 5}, Procs}}.
 
 start_listeners() ->
-    {ok, Port} = application:get_env(crawler, http_port),
-    {ok, ListenerCount} = application:get_env(crawler, http_listener_count),
+    {ok, Port} = application:get_env(bus_archive, http_port),
+    {ok, ListenerCount} = application:get_env(bus_archive, http_listener_count),
     
     Dispatch = cowboy_router:compile(
         [

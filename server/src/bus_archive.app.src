@@ -1,4 +1,4 @@
-{application, crawler, [
+{application, bus_archive, [
 	{description, ""},
 	{vsn, "0.1.0"},
 	{modules, []},
@@ -9,6 +9,6 @@
 		lager,
 		cowboy
 	]},
-	{mod, {crawler_app, []}},
+	{mod, {bus_archive_app, []}},
 	{env, []}
 ]}.
