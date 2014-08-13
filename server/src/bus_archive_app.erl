@@ -6,7 +6,8 @@
 -export([stop/1, stop/0]).
 
 start(_Type, _Args) ->
-    bus_archive_sup:start_link().
+    bus_archive_sup:start_link(),
+    worker_sup:start_link().
 
 stop(_State) ->
     ok.

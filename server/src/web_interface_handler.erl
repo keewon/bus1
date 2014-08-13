@@ -12,13 +12,31 @@
 init(_, Req, _Opts) ->
     {ok, Req, #state{}}.
 
-handle(Req, State=#state{}) ->
-    {ok, Req2} = cowboy_req:reply(
-                   200,
+handle(Req1, State=#state{}) ->
+    lager:info("handle ~p", [Req1]),
+    {Action, Req2} = cowboy_req:qs_val(<<"action">>, Req1),
+    {BusId, Req3} = cowboy_req:qs_val(<<"id">>, Req2),
+
+    {StatusCode, Body} = case handle_action(Action, [BusId]) of
+        {ok, _Pid} ->
+            {200, <<"OK">>};
+        {error, {already_started, _}} ->
+            {409, <<"Conflict">>};
+        _ ->
+            {500, <<"Internal Server Error">>}
+    end,
+
+    ReqBeforeReply = Req3,
+    {ok, ReqFinal} = cowboy_req:reply(
+                   StatusCode,
                    [{<<"content-type">>, <<"text/plain">>}],
-                   <<"Hello Erlang!">>,
-                   Req),
-    {ok, Req2, State}.
+                   Body,
+                   ReqBeforeReply),
+    {ok, ReqFinal, State}.
 
 terminate(_Reason, _Req, _State) ->
     ok.
+
+handle_action(<<"add">>, [BusId]) ->
+    supervisor:start_child(worker_sup, [BusId]).
+
