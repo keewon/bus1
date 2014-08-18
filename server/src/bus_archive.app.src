@@ -7,7 +7,8 @@
 		kernel,
 		stdlib,
 		lager,
-		cowboy
+		cowboy,
+		inets
 	]},
 	{mod, {bus_archive_app, []}},
 	{env, []}
