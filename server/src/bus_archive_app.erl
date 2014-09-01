@@ -7,8 +7,7 @@
 
 start(_Type, _Args) ->
     bus_archive_sup:start_link(),
-    worker_sup:start_link(),
-    worker_sup:add_child(<<"10053">>).
+    worker_sup:start_link().
 
 stop(_State) ->
     ok.
