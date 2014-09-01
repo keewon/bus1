@@ -23,6 +23,7 @@
 -define(INTERVAL, 30000). % 5 * 60 * 1000
 %-define(INTERVAL, 300000). % 5 * 60 * 1000
 -define(URL, "http://api.pubtrans.map.naver.com/2.1/live/getBusLocation.jsonp?caller=pc_map&routeId=").
+%-define(URL, "http://localhost").
 
 %% API.
 
@@ -35,7 +36,6 @@ start_link(BusId) ->
 %% gen_server.
 
 init([BusId]) ->
-    lager:info("start bus ~p", [BusId]),
     GetUrl = list_to_binary( ?URL ++ binary_to_list(BusId) ),
     erlang:send_after(?FIRST_INTERVAL, self(), check),
     {ok, #state{id=BusId, get_url=GetUrl}}.
