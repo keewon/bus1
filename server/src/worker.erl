@@ -19,9 +19,9 @@
           bus_location_list=[]
          }).
 
--define(FIRST_INTERVAL, 1000).
--define(INTERVAL, 30000). % 5 * 60 * 1000
-%-define(INTERVAL, 300000). % 5 * 60 * 1000
+-define(FIRST_INTERVAL, 1000). % TODO: random interval
+%-define(INTERVAL, 30000). % 30 * 1000
+-define(INTERVAL, 60000). % 1 * 60 * 1000
 -define(URL, "http://api.pubtrans.map.naver.com/2.1/live/getBusLocation.jsonp?caller=pc_map&routeId=").
 %-define(URL, "http://localhost").
 
@@ -36,7 +36,8 @@ start_link(BusId) ->
 %% gen_server.
 
 init([BusId]) ->
-    GetUrl = list_to_binary( ?URL ++ binary_to_list(BusId) ),
+    LBusId = binary_to_list(BusId),
+    GetUrl = list_to_binary( ?URL ++ LBusId ),
     erlang:send_after(?FIRST_INTERVAL, self(), check),
     {ok, #state{id=BusId, get_url=GetUrl}}.
 
@@ -63,7 +64,7 @@ handle_info(check, #state{id=BusId, get_url=GetUrl, bus_location_list=OldBusLoca
             UpdateDate = proplists:get_value(<<"updateDate">>, BusLocation),
             PlateNo    = proplists:get_value(<<"plateNo">>, BusLocation),
 
-            lager:info("~ts, ~p, ~s", [PlateNo, StationSeq, UpdateDate]),
+            %lager:info("~ts, ~p, ~s", [PlateNo, StationSeq, UpdateDate]),
 
             {OldListUpdated, NewData} =
                 case lists:keytake(PlateNo, 1, OldList) of
@@ -88,6 +89,18 @@ handle_info(check, #state{id=BusId, get_url=GetUrl, bus_location_list=OldBusLoca
 
     lager:info("obsoletes: ~p", [Obsoletes]),
     lager:info("new: ~p", [NewBusLocationList]),
+
+    case Obsoletes of
+        [] -> ok;
+        _ ->
+            FileName = binary_to_list(BusId) ++ "_" ++ ".txt",
+            {ok, IoDevice} = file:open(FileName, [append, {encoding, utf8}]),
+            lists:foreach(
+                fun({PlateNo, History}) ->
+                        io:format(IoDevice, "{ \"~ts\" : [~p]}", [PlateNo, History])
+                end, Obsoletes),
+            ok = file:close(IoDevice)
+    end,
 
     erlang:send_after(?INTERVAL, self(), check),
     {noreply, State#state{ bus_location_list=NewBusLocationList} };
