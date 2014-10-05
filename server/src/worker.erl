@@ -16,12 +16,16 @@
 -record(state, {
           id,
           get_url,
-          bus_location_list=[]
+          bus_location_list=[],
+          created_at,
+          updated_at,
+          last_error
          }).
 
 -define(FIRST_INTERVAL, 1000). % TODO: random interval
-%-define(INTERVAL, 30000). % 30 * 1000
+%-define(INTERVAL, 30000). % 10 * 1000
 -define(INTERVAL, 60000). % 1 * 60 * 1000
+-define(TIME_DIFF_RETIRE, 86400000). % 86400 * 1000 * 1000
 -define(URL, "http://api.pubtrans.map.naver.com/2.1/live/getBusLocation.jsonp?caller=pc_map&routeId=").
 %-define(URL, "http://localhost").
 
@@ -39,7 +43,7 @@ init([BusId]) ->
     LBusId = binary_to_list(BusId),
     GetUrl = list_to_binary( ?URL ++ LBusId ),
     erlang:send_after(?FIRST_INTERVAL, self(), check),
-    {ok, #state{id=BusId, get_url=GetUrl}}.
+    {ok, #state{id=BusId, get_url=GetUrl, created_at=os:timestamp()}}.
 
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
@@ -47,8 +51,50 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(check, #state{id=BusId, get_url=GetUrl, bus_location_list=OldBusLocationList} = State) ->
-    lager:info("check bus ~p", [BusId]),
+handle_info(check, #state{
+                      id=BusId, last_error=LastError,
+                      created_at=CreatedAt, updated_at=UpdatedAt} = State) ->
+    lager:debug("check bus ~p", [BusId]),
+    case catch check_bus(State) of
+        #state{} = NewState -> 
+            erlang:send_after(?INTERVAL, self(), check),
+            {noreply, NewState};
+        {'EXIT', Reason} ->
+            % Output error reason
+            case Reason of
+                LastError ->
+                    lager:debug("id: ~p, error: ~p", [BusId, Reason]);
+                _ ->
+                    lager:warning("Id: ~p, error: ~p", [BusId, Reason])
+            end,
+
+            % Check validity
+            Now = os:timestamp(),
+            LastValid = case UpdatedAt of
+                            undefined -> CreatedAt;
+                            _ -> UpdatedAt
+                        end,
+            case timer:now_diff(Now, LastValid) >= ?TIME_DIFF_RETIRE * 1000 of
+                true ->
+                    {stop, {retire, Reason}, State};
+                _ ->
+                    erlang:send_after(?INTERVAL, self(), check),
+                    {noreply, State#state{last_error = Reason}}
+            end
+    end;
+
+handle_info(_Info, State) ->
+    {noreply, State}.
+
+terminate(_Reason, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+%%%
+
+check_bus(#state{id=BusId, get_url=GetUrl, bus_location_list=OldBusLocationList} = State) ->
     {ok, {{_NewVersion, 200, _NewReasonPhrase}, _NewHeaders, NewBody}} =
         httpc:request(get, {binary_to_list(GetUrl), [{"User-Agent", "Mozilla/5.0"}]}, [], []),
     BBody = list_to_binary(NewBody),
@@ -87,42 +133,49 @@ handle_info(check, #state{id=BusId, get_url=GetUrl, bus_location_list=OldBusLoca
             {OldListUpdated, [NewData | NewList]}
         end, {OldBusLocationList, []}, BusLocationList),
 
-    lager:info("obsoletes: ~p", [Obsoletes]),
-    lager:info("new: ~p", [NewBusLocationList]),
-
     case Obsoletes of
         [] -> ok;
         _ ->
-            FileName = binary_to_list(BusId) ++ "_" ++ ".txt",
-            {ok, IoDevice} = file:open(FileName, [append, {encoding, utf8}]),
             lists:foreach(
-                fun({PlateNo, History}) ->
-                        io:format(IoDevice, "{ \"~ts\" : [~p]}", [PlateNo, History])
-                end, Obsoletes),
-            ok = file:close(IoDevice)
+                fun({PlateNo, [{_, LastUpdateDate}|_] = History}) ->
+                    % File name format: {BusId}/{Year}/{Month}{Day}.txt
+                    {Year, Month, Day, _, _, _} = split_update_date(LastUpdateDate),
+                    Path = ["data", binary_to_list(BusId), Year, Month],
+                    mkdir_p(Path, []),
+                    FileName = string:join(Path, "/") ++ "/" ++ Day ++ ".txt",
+                    {ok, IoDevice} = file:open(FileName, [append, {encoding, utf8}]),
+                    io:format(IoDevice, "{ \"~ts\" : [~ts]},~n", [PlateNo, io_format_history(History)]),
+                    ok = file:close(IoDevice)
+                end, Obsoletes)
     end,
 
-    erlang:send_after(?INTERVAL, self(), check),
-    {noreply, State#state{ bus_location_list=NewBusLocationList} };
-handle_info(_Info, State) ->
-    {noreply, State}.
+    State#state{ bus_location_list=NewBusLocationList, updated_at=os:timestamp()}.
 
-terminate(_Reason, _State) ->
-    ok.
+io_format_history(History) ->
+    io_format_history(History, []).
 
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+io_format_history([], Result) ->
+    Result;
+io_format_history([{Location, UpdateDate}|Tail], Result) ->
+    io_format_history(Tail, [[<<"{\"">>, integer_to_list(Location), <<"\":">> , <<"\"">>, UpdateDate, <<"\"},">> ] | Result]).
 
-%%%
+% 20140818003817 -> {"2014", "08", "18", "00", "38", "17"}
+split_update_date(DateStr) ->
+    Year = (binary_to_list(binary:part(DateStr, 0, 4))),
+    Month = (binary_to_list(binary:part(DateStr, 4, 2))),
+    Day = (binary_to_list(binary:part(DateStr, 6, 2))),
+    Hour = (binary_to_list(binary:part(DateStr, 8, 2))),
+    Minute = (binary_to_list(binary:part(DateStr, 10, 2))),
+    Second = (binary_to_list(binary:part(DateStr, 12, 2))),
 
-% 20140818003817
-%date_to_timestamp(DateStr) ->
-%    Year = list_to_integer(binary_to_list(binary:part(DateStr, 0, 4))),
-%    Month = list_to_integer(binary_to_list(binary:part(DateStr, 4, 2))),
-%    Day = list_to_integer(binary_to_list(binary:part(DateStr, 6, 2))),
-%    Hour = list_to_integer(binary_to_list(binary:part(DateStr, 8, 2))),
-%    Minute = list_to_integer(binary_to_list(binary:part(DateStr, 10, 2))),
-%    Second = list_to_integer(binary_to_list(binary:part(DateStr, 12, 2))),
-%
-%    lager:info("~p ~p ~p ~p ~p ~p", [Year, Month, Day, Hour, Minute, Second]).
+    {Year, Month, Day, Hour, Minute, Second}.
+
+mkdir_p([], _) -> ok;
+mkdir_p([H|T], []) ->
+    file:make_dir(H),
+    mkdir_p(T, H);
+mkdir_p([H|T], Parents) ->
+    Path = Parents ++ "/" ++ H,
+    file:make_dir(Path),
+    mkdir_p(T, Path).
 
