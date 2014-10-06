@@ -24,7 +24,7 @@
 
 -define(FIRST_INTERVAL, 1000). % TODO: random interval
 %-define(INTERVAL, 30000). % 10 * 1000
--define(INTERVAL, 60000). % 1 * 60 * 1000
+-define(INTERVAL, 180000). % 3 * 60 * 1000
 -define(TIME_DIFF_RETIRE, 86400000). % 86400 * 1000 * 1000
 -define(URL, "http://api.pubtrans.map.naver.com/2.1/live/getBusLocation.jsonp?caller=pc_map&routeId=").
 %-define(URL, "http://localhost").
@@ -124,13 +124,19 @@ check_bus(#state{id=BusId, get_url=GetUrl, bus_location_list=OldBusLocationList}
                                 { [ {PlateNo, History} | OldListUpdated1], {PlateNo, [{StationSeq, UpdateDate}]} };
                             true ->
                                 % No update
-                                { OldListUpdated1, {PlateNo, History} }
+                                { OldListUpdated1, undefined }
                         end;
                     false -> 
                         % New bus
                         { OldList, {PlateNo, [{StationSeq, UpdateDate}]} }
                 end,
-            {OldListUpdated, [NewData | NewList]}
+            {
+             OldListUpdated,
+             case NewData of
+                 undefined -> NewList;
+                 _ -> [NewData | NewList]
+             end
+            }
         end, {OldBusLocationList, []}, BusLocationList),
 
     case Obsoletes of
