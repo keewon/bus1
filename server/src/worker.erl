@@ -150,20 +150,29 @@ check_bus(#state{id=BusId, get_url=GetUrl, bus_location_list=OldBusLocationList}
                     mkdir_p(Path, []),
                     FileName = string:join(Path, "/") ++ "/" ++ Day ++ ".txt",
                     {ok, IoDevice} = file:open(FileName, [append, {encoding, utf8}]),
-                    io:format(IoDevice, "{ \"~ts\" : [~ts]},~n", [PlateNo, io_format_history(History)]),
+                    io:format(IoDevice, "{ \"~ts\" : [~ts]},~n", [PlateNo, io_format_history(History, {Month, Day})]),
                     ok = file:close(IoDevice)
                 end, Obsoletes)
     end,
 
     State#state{ bus_location_list=NewBusLocationList, updated_at=os:timestamp()}.
 
-io_format_history(History) ->
-    io_format_history(History, []).
+io_format_history(History, MonthDay) ->
+    io_format_history(History, [], MonthDay).
 
-io_format_history([], Result) ->
+io_format_history([], Result, _MonthDay) ->
     Result;
-io_format_history([{Location, UpdateDate}|Tail], Result) ->
-    io_format_history(Tail, [[<<"{\"">>, integer_to_list(Location), <<"\":">> , <<"\"">>, UpdateDate, <<"\"},">> ] | Result]).
+io_format_history([{Location, UpdateDate}|Tail], Result, MonthDay) ->
+    io_format_history(Tail,
+                      [[<<"{\"">>, integer_to_list(Location), <<"\":">>,
+                        <<"\"">>, format_date(UpdateDate, MonthDay), <<"\"},">> ] | Result], MonthDay).
+
+format_date(UpdateDate, {MonthRef, DayRef}) ->
+    {Year, Month, Day, Hour, Minute, Second} = split_update_date(UpdateDate),
+    case {Month, Day} of
+        {MonthRef, DayRef} -> [Hour, ":", Minute, ":", Second];
+        _ -> [Year, "-", Month, "-", Day, " ", Hour, ":", Minute, ":", Second]
+    end.
 
 % 20140818003817 -> {"2014", "08", "18", "00", "38", "17"}
 split_update_date(DateStr) ->
