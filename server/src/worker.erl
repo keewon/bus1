@@ -104,40 +104,7 @@ check_bus(#state{id=BusId, get_url=GetUrl, bus_location_list=OldBusLocationList}
     Result = proplists:get_value(<<"result">>, Message),
     BusLocationList = proplists:get_value(<<"busLocationList">>, Result),
 
-    {Obsoletes, NewBusLocationList} = lists:foldl(
-        fun(BusLocation, {OldList, NewList}) ->
-            StationSeq = proplists:get_value(<<"stationSeq">>, BusLocation),
-            UpdateDate = proplists:get_value(<<"updateDate">>, BusLocation),
-            PlateNo    = proplists:get_value(<<"plateNo">>, BusLocation),
-
-            %lager:info("~ts, ~p, ~s", [PlateNo, StationSeq, UpdateDate]),
-
-            {OldListUpdated, NewData} =
-                case lists:keytake(PlateNo, 1, OldList) of
-                    {value, {_, [{LastStationSeq, _LastUpdateDate}|_]=History}, OldListUpdated1} ->
-                        if
-                            StationSeq > LastStationSeq ->
-                                % Update bus
-                                { OldListUpdated1, {PlateNo, [{StationSeq, UpdateDate} | History]} };
-                            StationSeq < LastStationSeq ->
-                                % New bus
-                                { [ {PlateNo, History} | OldListUpdated1], {PlateNo, [{StationSeq, UpdateDate}]} };
-                            true ->
-                                % No update
-                                { OldListUpdated1, undefined }
-                        end;
-                    false -> 
-                        % New bus
-                        { OldList, {PlateNo, [{StationSeq, UpdateDate}]} }
-                end,
-            {
-             OldListUpdated,
-             case NewData of
-                 undefined -> NewList;
-                 _ -> [NewData | NewList]
-             end
-            }
-        end, {OldBusLocationList, []}, BusLocationList),
+    {Obsoletes, NewBusLocationList} = update_bus_location_list(OldBusLocationList, BusLocationList),
 
     case Obsoletes of
         [] -> ok;
@@ -156,6 +123,35 @@ check_bus(#state{id=BusId, get_url=GetUrl, bus_location_list=OldBusLocationList}
     end,
 
     State#state{ bus_location_list=NewBusLocationList, updated_at=os:timestamp()}.
+
+
+update_bus_location_list(OldBusLocationList, BusLocationList) ->
+    lists:foldl(
+    fun(BusLocation, {OldList, NewList}) ->
+        StationSeq = proplists:get_value(<<"stationSeq">>, BusLocation),
+        UpdateDate = proplists:get_value(<<"updateDate">>, BusLocation),
+        PlateNo    = proplists:get_value(<<"plateNo">>, BusLocation),
+
+        {OldListUpdated, NewData} =
+            case lists:keytake(PlateNo, 1, OldList) of
+                {value, {_, [{LastStationSeq, _LastUpdateDate}|_]=History}, OldListUpdated1} ->
+                    if
+                        StationSeq > LastStationSeq ->
+                            % Update bus
+                            { OldListUpdated1, {PlateNo, [{StationSeq, UpdateDate} | History]} };
+                        StationSeq < LastStationSeq ->
+                            % New bus
+                            { [ {PlateNo, History} | OldListUpdated1], {PlateNo, [{StationSeq, UpdateDate}]} };
+                        true ->
+                            % No update
+                            { OldListUpdated1, {PlateNo, History} }
+                    end;
+                false -> 
+                    % New bus
+                    { OldList, {PlateNo, [{StationSeq, UpdateDate}]} }
+            end,
+        { OldListUpdated, [NewData | NewList] }
+    end, {OldBusLocationList, []}, BusLocationList).
 
 io_format_history(History, MonthDay) ->
     io_format_history(History, [], MonthDay).
@@ -194,3 +190,32 @@ mkdir_p([H|T], Parents) ->
     file:make_dir(Path),
     mkdir_p(T, Path).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+update_bus_location_list_test() ->
+    A = [ {1, [{10,<<"20090101000000">>}]} ],
+    B = [[ {<<"plateNo">>, 1}, {<<"stationSeq">>, 10}, {<<"updateDate">>, <<"20090101000010">>}]],
+    C = [[ {<<"plateNo">>, 1}, {<<"stationSeq">>, 12}, {<<"updateDate">>, <<"20090101000010">>}]],
+    D = [[ {<<"plateNo">>, 1}, {<<"stationSeq">>, 1}, {<<"updateDate">>, <<"20090101000010">>}]],
+
+    {ABO, ABN} = update_bus_location_list(A, B),
+
+    ?assertEqual([], ABO),
+    ?assertEqual(A, ABN),
+
+    {ACO, ACN} = update_bus_location_list(A, C),
+
+    ?assertEqual([], ACO),
+    ?assertEqual([ {1, [{12, <<"20090101000010">>}, {10, <<"20090101000000">>} ]}], ACN),
+
+
+    {ADO, ADN} = update_bus_location_list(A, D),
+
+    ?assertEqual([{1, [{10, <<"20090101000000">>}]}], ADO),
+    ?assertEqual([{1, [{1, <<"20090101000010">>}]}], ADN).
+
+worker_tests() ->
+    update_bus_location_list_test().
+
+-endif.
