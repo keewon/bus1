@@ -15,19 +15,24 @@
 
 -record(state, {
           id,
-          get_url,
-          bus_location_list=[],
+          bus_loc_list=[],
           created_at,
-          updated_at,
-          last_error
+          loc_updated_at,
+          last_error,
+          route_updated_at,
+          route_raw,
+          bus_first_time,
+          station_array
          }).
 
--define(FIRST_INTERVAL, 1000). % TODO: random interval
+-define(INTERVAL_LOC_1, 1000). % TODO: random interval
+-define(INTERVAL_ROUTE_1, 1000). % TODO: random interval
 %-define(INTERVAL, 30000). % 10 * 1000
--define(INTERVAL, 180000). % 3 * 60 * 1000
+-define(INTERVAL_LOC, 180000). % 3 * 60 * 1000
+-define(INTERVAL_ROUTE, 3600000). % 60 * 60 * 1000
 -define(TIME_DIFF_RETIRE, 86400000). % 86400 * 1000 * 1000
--define(URL, "http://api.pubtrans.map.naver.com/2.1/live/getBusLocation.jsonp?caller=pc_map&routeId=").
-%-define(URL, "http://localhost").
+-define(LOC_URL, "http://api.pubtrans.map.naver.com/2.1/live/getBusLocation.jsonp?caller=pc_map&routeId=").
+-define(ROUTE_URL, "http://map.naver.com/pubtrans/getBusRouteInfo.nhn?busID=").
 
 %% API.
 
@@ -40,25 +45,28 @@ start_link(BusId) ->
 %% gen_server.
 
 init([BusId]) ->
-    LBusId = binary_to_list(BusId),
-    GetUrl = list_to_binary( ?URL ++ LBusId ),
-    erlang:send_after(?FIRST_INTERVAL, self(), check),
-    {ok, #state{id=BusId, get_url=GetUrl, created_at=os:timestamp()}}.
+    erlang:send_after(get_first_loc_interval(), self(), check),
+    {ok, #state{id=BusId, created_at=os:timestamp()}}.
 
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
+
+handle_cast(debug, State) ->
+    lager:debug("~p", [State]),
+    {noreply, State};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(check, #state{
                       id=BusId, last_error=LastError,
-                      created_at=CreatedAt, updated_at=UpdatedAt} = State) ->
-    lager:debug("check bus ~p", [BusId]),
-    case catch check_bus(State) of
+                      created_at=CreatedAt, loc_updated_at=LocUpdatedAt
+                     } = State) ->
+    lager:debug("check location ~p", [BusId]),
+    case catch check_location(State) of
         #state{} = NewState -> 
-            erlang:send_after(?INTERVAL, self(), check),
-            {noreply, NewState};
+            erlang:send_after(get_loc_interval(), self(), check),
+            {noreply, NewState#state{last_error = undefined}};
         {'EXIT', Reason} ->
             % Output error reason
             case Reason of
@@ -70,15 +78,15 @@ handle_info(check, #state{
 
             % Check validity
             Now = os:timestamp(),
-            LastValid = case UpdatedAt of
+            LastValid = case LocUpdatedAt of
                             undefined -> CreatedAt;
-                            _ -> UpdatedAt
+                            _ -> LocUpdatedAt
                         end,
             case timer:now_diff(Now, LastValid) >= ?TIME_DIFF_RETIRE * 1000 of
                 true ->
                     {stop, {retire, Reason}, State};
                 _ ->
-                    erlang:send_after(?INTERVAL, self(), check),
+                    erlang:send_after(get_loc_interval(), self(), check),
                     {noreply, State#state{last_error = Reason}}
             end
     end;
@@ -94,9 +102,12 @@ code_change(_OldVsn, State, _Extra) ->
 
 %%%
 
-check_bus(#state{id=BusId, get_url=GetUrl, bus_location_list=OldBusLocationList} = State) ->
+check_location(#state{
+                  id=BusId,
+                  bus_loc_list=OldBusLocationList
+                 } = State) ->
     {ok, {{_NewVersion, 200, _NewReasonPhrase}, _NewHeaders, NewBody}} =
-        httpc:request(get, {binary_to_list(GetUrl), [{"User-Agent", "Mozilla/5.0"}]}, [], []),
+        httpc:request(get, {get_loc_url(BusId), [{"User-Agent", "Mozilla/5.0"}]}, [], []),
     BBody = list_to_binary(NewBody),
     Json = jsx:decode(BBody),
     % message/result/busLocationList
@@ -104,7 +115,13 @@ check_bus(#state{id=BusId, get_url=GetUrl, bus_location_list=OldBusLocationList}
     Result = proplists:get_value(<<"result">>, Message),
     BusLocationList = proplists:get_value(<<"busLocationList">>, Result),
 
-    {Obsoletes, NewBusLocationList} = update_bus_location_list(OldBusLocationList, BusLocationList),
+    {Obsoletes, NewBusLocationList} = update_bus_loc_list(OldBusLocationList, BusLocationList),
+
+    NewState = case Obsoletes of
+                   [] -> State;
+                   _ ->
+                       check_route(State)
+               end,
 
     case Obsoletes of
         [] -> ok;
@@ -117,15 +134,18 @@ check_bus(#state{id=BusId, get_url=GetUrl, bus_location_list=OldBusLocationList}
                     mkdir_p(Path, []),
                     FileName = string:join(Path, "/") ++ "/" ++ Day ++ ".txt",
                     {ok, IoDevice} = file:open(FileName, [append, {encoding, utf8}]),
-                    io:format(IoDevice, "{ \"~ts\" : [~ts]},~n", [PlateNo, io_format_history(History, {Month, Day})]),
+                    io:format(IoDevice, "{ \"~ts\" : [~ts]},~n",
+                              [PlateNo,
+                               io_format_history(
+                                 History, {Month, Day}, NewState#state.station_array)]),
                     ok = file:close(IoDevice)
                 end, Obsoletes)
     end,
 
-    State#state{ bus_location_list=NewBusLocationList, updated_at=os:timestamp()}.
+    NewState#state{ bus_loc_list=NewBusLocationList, loc_updated_at=os:timestamp()}.
 
 
-update_bus_location_list(OldBusLocationList, BusLocationList) ->
+update_bus_loc_list(OldBusLocationList, BusLocationList) ->
     lists:foldl(
     fun(BusLocation, {OldList, NewList}) ->
         StationSeq = proplists:get_value(<<"stationSeq">>, BusLocation),
@@ -136,15 +156,14 @@ update_bus_location_list(OldBusLocationList, BusLocationList) ->
             case lists:keytake(PlateNo, 1, OldList) of
                 {value, {_, [{LastStationSeq, _LastUpdateDate}|_]=History}, OldListUpdated1} ->
                     if
-                        StationSeq > LastStationSeq ->
-                            % Update bus
-                            { OldListUpdated1, {PlateNo, [{StationSeq, UpdateDate} | History]} };
-                        StationSeq < LastStationSeq ->
+                        StationSeq < (LastStationSeq - 2) -> % some buses go back to previous station
                             % New bus
                             { [ {PlateNo, History} | OldListUpdated1], {PlateNo, [{StationSeq, UpdateDate}]} };
                         true ->
+                            % Update bus
+                            { OldListUpdated1, {PlateNo, [{StationSeq, UpdateDate} | History]} }
                             % No update
-                            { OldListUpdated1, {PlateNo, History} }
+                            % { OldListUpdated1, {PlateNo, History} }
                     end;
                 false -> 
                     % New bus
@@ -153,15 +172,73 @@ update_bus_location_list(OldBusLocationList, BusLocationList) ->
         { OldListUpdated, [NewData | NewList] }
     end, {OldBusLocationList, []}, BusLocationList).
 
-io_format_history(History, MonthDay) ->
-    io_format_history(History, [], MonthDay).
+check_route(#state{route_updated_at=undefined, last_error=undefined}=State) ->
+    check_route1(State);
 
-io_format_history([], Result, _MonthDay) ->
+check_route(#state{route_updated_at=RouteUpdatedAt, last_error=undefined}=State) ->
+    case timer:now_diff(os:timestamp(), RouteUpdatedAt) >= ?INTERVAL_ROUTE of
+        true ->
+            check_route1(State);
+        _ ->
+            State
+    end;
+
+check_route(State) ->
+    check_route1(State).
+
+check_route1(#state{id=BusId, route_raw=RouteRaw} = State) ->
+    lager:debug("check route ~p", [BusId]),
+
+    {ok, {{_NewVersion, 200, _NewReasonPhrase}, _NewHeaders, NewBody}} =
+        httpc:request(get, {get_route_url(BusId), [{"User-Agent", "Mozilla/5.0"}]}, [], []),
+    BBody = list_to_binary(NewBody),
+
+    case BBody of
+        RouteRaw -> State;
+        _ ->
+            Json = jsx:decode(BBody),
+            Result = proplists:get_value(<<"result">>, Json),
+            BusFirstTimeRaw = proplists:get_value(<<"busFirstTime">>, Result),
+            BusFirstTime = case BusFirstTimeRaw of
+                BusFirstTimeBinary when is_binary(BusFirstTimeBinary) ->
+                    BusFirstTimeList = binary_to_list(BusFirstTimeBinary),
+                    case BusFirstTimeList of
+                        [H1, H2, $:, M1, M2] ->
+                            { [H1, H2], [M1, M2] };
+                        _ ->
+                            undefined
+                    end;
+                _ -> undefined
+            end,
+            Stations = proplists:get_value(<<"station">>, Result),
+            StationLen = length(Stations),
+            StationArray0 = array:new([{size,StationLen}, {fixed, false}, {default, <<"">>}]),
+            {StationArray, _} = lists:foldl(
+                                fun(Station, {Array, Index}) ->
+                                        Name = proplists:get_value(<<"stationName">>, Station),
+                                        {array:set(Index, Name, Array), Index+1}
+                                end, {StationArray0, 0}, Stations),
+            lager:info("route changed ~p", [BusId]),
+            State#state{
+              station_array=StationArray,
+              route_raw=BBody,
+              bus_first_time=BusFirstTime,
+              route_updated_at=os:timestamp()
+             }
+    end.
+
+io_format_history(History, MonthDay, StationArray) ->
+    io_format_history(History, [], MonthDay, StationArray).
+
+io_format_history([], Result, _MonthDay, _StationArray) ->
     Result;
-io_format_history([{Location, UpdateDate}|Tail], Result, MonthDay) ->
+io_format_history([{Location, UpdateDate}|Tail], Result, MonthDay, StationArray) ->
+    StationName = array:get(Location, StationArray),
     io_format_history(Tail,
                       [[<<"{\"">>, integer_to_list(Location), <<"\":">>,
-                        <<"\"">>, format_date(UpdateDate, MonthDay), <<"\"},">> ] | Result], MonthDay).
+                        <<"{\"t\":\"">>, format_date(UpdateDate, MonthDay), <<"\",">>,
+                        <<"\"n\":\"">>, StationName, <<"\"}},">> ] | Result],
+                      MonthDay, StationArray).
 
 format_date(UpdateDate, {MonthRef, DayRef}) ->
     {Year, Month, Day, Hour, Minute, Second} = split_update_date(UpdateDate),
@@ -190,32 +267,44 @@ mkdir_p([H|T], Parents) ->
     file:make_dir(Path),
     mkdir_p(T, Path).
 
+get_loc_url(BusId) ->
+    ?LOC_URL ++ binary_to_list(BusId).
+
+get_route_url(BusId) ->
+    ?ROUTE_URL ++ binary_to_list(BusId).
+
+get_first_loc_interval() ->
+    ?INTERVAL_LOC_1.
+
+get_loc_interval() ->
+    ?INTERVAL_LOC.
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-update_bus_location_list_test() ->
+update_bus_loc_list_test() ->
     A = [ {1, [{10,<<"20090101000000">>}]} ],
     B = [[ {<<"plateNo">>, 1}, {<<"stationSeq">>, 10}, {<<"updateDate">>, <<"20090101000010">>}]],
     C = [[ {<<"plateNo">>, 1}, {<<"stationSeq">>, 12}, {<<"updateDate">>, <<"20090101000010">>}]],
     D = [[ {<<"plateNo">>, 1}, {<<"stationSeq">>, 1}, {<<"updateDate">>, <<"20090101000010">>}]],
 
-    {ABO, ABN} = update_bus_location_list(A, B),
+    {ABO, ABN} = update_bus_loc_list(A, B),
 
     ?assertEqual([], ABO),
     ?assertEqual(A, ABN),
 
-    {ACO, ACN} = update_bus_location_list(A, C),
+    {ACO, ACN} = update_bus_loc_list(A, C),
 
     ?assertEqual([], ACO),
     ?assertEqual([ {1, [{12, <<"20090101000010">>}, {10, <<"20090101000000">>} ]}], ACN),
 
 
-    {ADO, ADN} = update_bus_location_list(A, D),
+    {ADO, ADN} = update_bus_loc_list(A, D),
 
     ?assertEqual([{1, [{10, <<"20090101000000">>}]}], ADO),
     ?assertEqual([{1, [{1, <<"20090101000010">>}]}], ADN).
 
 worker_tests() ->
-    update_bus_location_list_test().
+    update_bus_loc_list_test().
 
 -endif.
